@@ -171,12 +171,11 @@ input:focus,textarea:focus{border-color:var(--green);}
     <p class="hint mt8">Abra o Spotify em qualquer dispositivo para ele aparecer aqui.</p>
   </div>
   <div>
-    <label>Playlist do Spotify</label>
-    <div style="display:flex;gap:8px;">
-      <input type="text" id="playlist-input" placeholder="Cole a URL ou ID da playlist…" style="flex:1;">
-      <button class="btn btn-outline" id="btn-load-playlist" onclick="loadPlaylist()" style="white-space:nowrap;">↓ Carregar</button>
+    <label>Playlist (exportify.net → CSV)</label>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <input type="file" id="csv-input" accept=".csv" onchange="loadCSV(event)" style="flex:1;padding:10px;cursor:pointer;">
     </div>
-    <p class="hint mt8">Cole o link da playlist: <strong>open.spotify.com/playlist/…</strong> — o app importa as músicas automaticamente.</p>
+    <p class="hint mt8">Exporte sua playlist em <strong>exportify.net</strong> e faça upload do CSV aqui — sem precisar editar nada.</p>
     <div id="playlist-status" style="display:none;margin-top:8px;font-size:.75rem;padding:10px 14px;border-radius:7px;"></div>
   </div>
   <div>
@@ -433,67 +432,66 @@ async function pollPlayback(){
   }catch(e){}
 }
 
-// ── PLAYLIST IMPORT ──
-function extractPlaylistId(input){
-  input=input.trim();
-  // full URL: open.spotify.com/playlist/ID or spotify:playlist:ID
-  const urlMatch=input.match(/playlist\/([A-Za-z0-9]+)/);
-  if(urlMatch)return urlMatch[1];
-  // bare ID (22 alphanumeric chars)
-  if(/^[A-Za-z0-9]{22}$/.test(input))return input;
-  return null;
-}
+// ── CSV IMPORT ──
+function loadCSV(event){
+  const file = event.target.files[0];
+  const status = document.getElementById('playlist-status');
+  if(!file){ songs=[]; return; }
 
-async function loadPlaylist(){
-  const input=document.getElementById('playlist-input').value.trim();
-  const id=extractPlaylistId(input);
-  const status=document.getElementById('playlist-status');
-  const btn=document.getElementById('btn-load-playlist');
-
-  if(!id){
-    status.style.display='block';
-    status.style.background='#e0555512';status.style.color='var(--accent2)';status.style.border='1px solid #e0555535';
-    status.textContent='URL ou ID inválido. Cole o link completo da playlist.';
-    return;
-  }
-
-  btn.disabled=true;btn.textContent='Carregando…';
   status.style.display='block';
   status.style.background='var(--surface)';status.style.color='var(--muted2)';status.style.border='1px solid var(--border)';
-  status.textContent='Buscando músicas…';
+  status.textContent='Lendo arquivo…';
 
-  try{
-    const tracks=[];
-    let url=`/playlists/${id}/tracks?limit=100`;
-    while(url){
-      const r=await sf(url);
-      if(!r.ok){
-        const err=await r.json().catch(()=>({}));
-        throw new Error(`Erro ${r.status}: ${err?.error?.message||'Playlist não encontrada ou privada.'}`);
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const lines = e.target.result.split('\n');
+      if(lines.length < 2) throw new Error('Arquivo vazio ou inválido.');
+
+      // parse header
+      const header = parseCSVLine(lines[0]);
+      const col = name => header.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
+      const iTitle  = col('Track Name');
+      const iArtist = col('Artist Name(s)');
+      const iDate   = col('Release Date');
+      if(iTitle<0||iArtist<0||iDate<0) throw new Error('Colunas não encontradas. Certifique-se de usar o CSV do exportify.');
+
+      const tracks = [];
+      for(let i=1;i<lines.length;i++){
+        const line = lines[i].trim();
+        if(!line) continue;
+        const cols = parseCSVLine(line);
+        const title  = cols[iTitle]?.trim();
+        const artist = (cols[iArtist]||'').split(',')[0].trim(); // first artist only
+        const year   = parseInt((cols[iDate]||'').substring(0,4));
+        if(title && artist && !isNaN(year) && year>1900 && year<=new Date().getFullYear())
+          tracks.push({title, artist, year});
       }
-      const d=await r.json();
-      for(const item of (d.items||[])){
-        const t=item?.track;
-        if(!t||!t.name||t.type==='episode')continue;
-        const year=parseInt((t.album?.release_date||'').substring(0,4));
-        const title=t.name;
-        const artist=t.artists?.[0]?.name||'';
-        if(!isNaN(year)&&year>1900&&year<=new Date().getFullYear()&&title&&artist)
-          tracks.push({title,artist,year});
-      }
-      url=d.next?d.next.replace('https://api.spotify.com/v1',''):null;
+
+      if(tracks.length < 5) throw new Error(`Apenas ${tracks.length} músicas válidas. O arquivo precisa ter ao menos 5.`);
+      songs = tracks;
+      status.style.background='#1DB95418';status.style.color='var(--green)';status.style.border='1px solid #1DB95440';
+      status.textContent=`✓ ${songs.length} músicas carregadas!`;
+    }catch(err){
+      songs=[];
+      status.style.background='#e0555512';status.style.color='var(--accent2)';status.style.border='1px solid #e0555535';
+      status.textContent='Erro: '+err.message;
     }
-    if(tracks.length<5)throw new Error(`Apenas ${tracks.length} músicas válidas encontradas. A playlist precisa ter ao menos 5.`);
-    songs=tracks;
-    status.style.background='#1DB95418';status.style.color='var(--green)';status.style.border='1px solid #1DB95440';
-    status.textContent=`✓ ${songs.length} músicas carregadas!`;
-  }catch(e){
-    status.style.background='#e0555512';status.style.color='var(--accent2)';status.style.border='1px solid #e0555535';
-    status.textContent='Erro: '+e.message;
-    songs=[];
-  }finally{
-    btn.disabled=false;btn.textContent='↓ Carregar';
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
+function parseCSVLine(line){
+  // handles quoted fields with commas inside
+  const result=[];let cur='';let inQ=false;
+  for(let i=0;i<line.length;i++){
+    const c=line[i];
+    if(c==='"'){inQ=!inQ;}
+    else if(c===','&&!inQ){result.push(cur);cur='';}
+    else{cur+=c;}
   }
+  result.push(cur);
+  return result;
 }
 
 function normalize(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim();}
