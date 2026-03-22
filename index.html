@@ -171,9 +171,13 @@ input:focus,textarea:focus{border-color:var(--green);}
     <p class="hint mt8">Abra o Spotify em qualquer dispositivo para ele aparecer aqui.</p>
   </div>
   <div>
-    <label>Músicas (Título — Artista — Ano)</label>
-    <textarea id="songs-input" placeholder="Bohemian Rhapsody — Queen — 1975&#10;Shape of You — Ed Sheeran — 2017&#10;Garota de Ipanema — Tom Jobim — 1962"></textarea>
-    <p class="hint mt8">Use o arquivo <strong>musicas_hitster.txt</strong> gerado anteriormente.</p>
+    <label>Playlist do Spotify</label>
+    <div style="display:flex;gap:8px;">
+      <input type="text" id="playlist-input" placeholder="Cole a URL ou ID da playlist…" style="flex:1;">
+      <button class="btn btn-outline" id="btn-load-playlist" onclick="loadPlaylist()" style="white-space:nowrap;">↓ Carregar</button>
+    </div>
+    <p class="hint mt8">Cole o link da playlist: <strong>open.spotify.com/playlist/…</strong> — o app importa as músicas automaticamente.</p>
+    <div id="playlist-status" style="display:none;margin-top:8px;font-size:.75rem;padding:10px 14px;border-radius:7px;"></div>
   </div>
   <div>
     <label>Jogadores (um por linha)</label>
@@ -186,8 +190,7 @@ input:focus,textarea:focus{border-color:var(--green);}
   <div id="err-msg"></div>
   <button class="btn btn-green full" onclick="startGame()">▶ INICIAR JOGO</button>
   <div class="hint token">
-    <strong>🪙 Fichas:</strong> Adivinhe nome+artista enquanto toca → +1 ficha.<br>
-    <strong>1</strong> → intervir · <strong>2</strong> → pular · <strong>3</strong> → carta grátis.
+    <strong>🪙 Fichas:</strong> Adivinhe nome+artista enquanto a música toca → +1 ficha. No fim, quem tiver mais fichas leva o prêmio de reconhecimento musical!
   </div>
 </div>
 
@@ -273,13 +276,8 @@ input:focus,textarea:focus{border-color:var(--green);}
     <div id="instr-text"></div>
   </div>
   <div id="token-panel">
-    <h3>🪙 Usar Fichas (jogador atual)</h3>
-    <div class="token-actions">
-      <button class="btn btn-outline" id="btn-use1" onclick="useTokenIntervene()">1 ficha — Intervir</button>
-      <button class="btn btn-outline" id="btn-use2" onclick="useTokenSkip()">2 fichas — Pular</button>
-      <button class="btn btn-outline" id="btn-use3" onclick="useTokenFree()">3 fichas — Carta grátis</button>
-    </div>
-    <div class="mt8" style="font-size:.7rem;color:var(--muted2)">Intervenção: use na fase de revelação de outro jogador, após ele posicionar.</div>
+    <h3>🪙 Fichas conquistadas</h3>
+    <div id="token-display" style="font-size:.82rem;color:var(--muted2);">Adivinhe nome+artista enquanto a música toca para ganhar fichas. Elas valem pontos no fim!</div>
   </div>
   <div id="timeline-panel">
     <h3>🗓 Cartas reveladas nesta sessão</h3>
@@ -435,15 +433,65 @@ async function pollPlayback(){
   }catch(e){}
 }
 
-// ── PARSE ──
-function parseSongs(raw){
-  return raw.trim().split('\n').reduce((acc,l)=>{
-    l=l.trim();if(!l)return acc;
-    const p=l.split(/\s*[—\-–|]\s*/);
-    if(p.length>=3){const y=parseInt(p[p.length-1]),ti=p[0].trim(),ar=p.slice(1,p.length-1).join(' — ').trim();
-      if(!isNaN(y)&&y>1900&&y<=new Date().getFullYear()&&ti)acc.push({title:ti,artist:ar,year:y});}
-    return acc;
-  },[]);
+// ── PLAYLIST IMPORT ──
+function extractPlaylistId(input){
+  input=input.trim();
+  // full URL: open.spotify.com/playlist/ID or spotify:playlist:ID
+  const urlMatch=input.match(/playlist\/([A-Za-z0-9]+)/);
+  if(urlMatch)return urlMatch[1];
+  // bare ID (22 alphanumeric chars)
+  if(/^[A-Za-z0-9]{22}$/.test(input))return input;
+  return null;
+}
+
+async function loadPlaylist(){
+  const input=document.getElementById('playlist-input').value.trim();
+  const id=extractPlaylistId(input);
+  const status=document.getElementById('playlist-status');
+  const btn=document.getElementById('btn-load-playlist');
+
+  if(!id){
+    status.style.display='block';
+    status.style.background='#e0555512';status.style.color='var(--accent2)';status.style.border='1px solid #e0555535';
+    status.textContent='URL ou ID inválido. Cole o link completo da playlist.';
+    return;
+  }
+
+  btn.disabled=true;btn.textContent='Carregando…';
+  status.style.display='block';
+  status.style.background='var(--surface)';status.style.color='var(--muted2)';status.style.border='1px solid var(--border)';
+  status.textContent='Buscando músicas…';
+
+  try{
+    const tracks=[];
+    let url=`/playlists/${id}/tracks?limit=100&fields=next,items(track(name,artists,album(release_date)))`;
+    while(url){
+      const r=await sf(url);
+      if(!r.ok)throw new Error('Playlist não encontrada ou privada.');
+      const d=await r.json();
+      for(const item of d.items){
+        const t=item.track;
+        if(!t||!t.name)continue;
+        const year=parseInt((t.album?.release_date||'').substring(0,4));
+        const title=t.name;
+        const artist=t.artists?.[0]?.name||'';
+        if(!isNaN(year)&&year>1900&&year<=new Date().getFullYear()&&title&&artist)
+          tracks.push({title,artist,year});
+      }
+      // pagination: next is a full URL, strip the base
+      url=d.next?d.next.replace('https://api.spotify.com/v1',''):null;
+    }
+    if(tracks.length<5)throw new Error(`Apenas ${tracks.length} músicas válidas encontradas. A playlist precisa ter ao menos 5.`);
+    songs=tracks;
+    status.style.background='#1DB95418';status.style.color='var(--green)';status.style.border='1px solid #1DB95440';
+    status.textContent=`✓ ${songs.length} músicas carregadas!`;
+  }catch(e){
+    status.style.background='#e0555512';status.style.color='var(--accent2)';status.style.border='1px solid #e0555535';
+    status.textContent='Erro: '+e.message;
+    songs=[];
+  }finally{
+    btn.disabled=false;btn.textContent='↓ Carregar';
+  }
 }
 
 function normalize(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim();}
@@ -452,10 +500,10 @@ function fuzzy(a,b){const na=normalize(a),nb=normalize(b);return na&&(nb.include
 // ── START ──
 function startGame(){
   if(!selectedDeviceId)return showErr('Selecione um dispositivo Spotify.');
-  songs=parseSongs(document.getElementById('songs-input').value);
+  if(!songs.length)return showErr('Carregue uma playlist primeiro.');
   const names=document.getElementById('players-input').value.trim().split('\n').map(s=>s.trim()).filter(Boolean);
   if(names.length<2)return showErr('Adicione ao menos 2 jogadores.');
-  if(songs.length<names.length+5)return showErr('Adicione mais músicas.');
+  if(songs.length<names.length+5)return showErr('A playlist precisa ter mais músicas do que o número de jogadores.');
   players=names;players.forEach(p=>{scores[p]=0;tokens[p]=0;anchors[p]=null;playerCards[p]=[];});
   currentIdx=0;round=1;
   winScore=parseInt(document.getElementById('win-score').value)||10;
@@ -501,7 +549,7 @@ async function nextTurn(){
   document.getElementById('act-reveal').innerHTML=`<button class="btn btn-green" onclick="markCorrect()">✓ Acertou a posição</button><button class="btn btn-red" onclick="markWrong()">✗ Errou a posição</button>`;
   const oldBtn=document.getElementById('btn-confirm-position');if(oldBtn)oldBtn.remove();
 
-  setPhase(0);renderScoreboard();renderTurnBanner();renderTimeline();updateTokenButtons();
+  setPhase(0);renderScoreboard();renderTurnBanner();renderTimeline();updateTokenDisplay();
 
   try{
     const track=await searchTrack(currentSong.title,currentSong.artist);
@@ -546,7 +594,7 @@ function submitGuess(){
   res.classList.remove('hidden');
   document.getElementById('act-after-guess').classList.remove('hidden');
   document.getElementById('guess-form').style.display='none';
-  if(both&&!guessedToken){guessedToken=true;tokens[players[currentIdx]]++;renderScoreboard();updateTokenButtons();toast(`🪙 +1 ficha para ${players[currentIdx]}!`);}
+  if(both&&!guessedToken){guessedToken=true;tokens[players[currentIdx]]++;renderScoreboard();updateTokenDisplay();toast(`🪙 +1 ficha para ${players[currentIdx]}!`);}
 }
 
 function skipGuess(){
@@ -693,46 +741,15 @@ async function seekTrack(e){
   await seekPlayback(seekStartMs+Math.floor(pct*PREVIEW_MS));
 }
 
-function markCorrect(){scores[players[currentIdx]]++;revealed.push({...currentSong});renderTimeline();if(scores[players[currentIdx]]>=winScore){showWinner();return;}advance();}
-function markWrong(){advance();}
 function advance(){clearInterval(progressInterval);clearTimeout(stopTimer);currentIdx=(currentIdx+1)%players.length;if(currentIdx===0)round++;if(round>maxRounds){showWinner();return;}nextTurn();}
 
 // ── TOKENS ──
-function updateTokenButtons(){
-  const t=tokens[players[currentIdx]]||0;
-  document.getElementById('btn-use1').disabled=(t<1);document.getElementById('btn-use2').disabled=(t<2);document.getElementById('btn-use3').disabled=(t<3);
-  document.getElementById('btn-use1').textContent=`1 ficha — Intervir (${t})`;
-  document.getElementById('btn-use2').textContent=`2 fichas — Pular (${t})`;
-  document.getElementById('btn-use3').textContent=`3 fichas — Carta grátis (${t})`;
+function updateTokenDisplay(){
+  const p=players[currentIdx];
+  const t=tokens[p]||0;
+  document.getElementById('token-display').textContent=
+    players.map(pl=>`${pl}: 🪙${tokens[pl]||0}`).join(' · ');
 }
-
-function useTokenIntervene(){
-  if(phase!==3){toast('⚠️ Intervenção só na fase de revelação!');return;}
-  if((tokens[players[currentIdx]]||0)<1)return;
-  openModal('🪙 Intervenção!',`${players[currentIdx]} gasta 1 ficha para desafiar a posição.\n\nCerto → ganha a carta.\nErrado → perde a ficha.`,[
-    {label:'✓ Certa',cls:'btn-green',fn:()=>{spendTokens(1);const p=players[currentIdx];if(!playerCards[p])playerCards[p]=[];playerCards[p].push({...currentSong});scores[p]++;revealed.push({...currentSong});renderTimeline();closeModal();toast(`🏆 +1 carta!`);if(scores[p]>=winScore){showWinner();return;}advance();}},
-    {label:'✗ Errada',cls:'btn-red',fn:()=>{spendTokens(1);closeModal();toast('❌ Ficha perdida.');advance();}},
-    {label:'Cancelar',cls:'btn-outline',fn:closeModal}
-  ]);
-}
-
-function useTokenSkip(){
-  if((tokens[players[currentIdx]]||0)<2)return;
-  openModal('⤭ Pular',`${players[currentIdx]} gasta 2 fichas para nova música.`,[
-    {label:'Pular',cls:'btn-accent',fn:()=>{spendTokens(2);closeModal();toast('Pulada!');nextTurn();}},
-    {label:'Cancelar',cls:'btn-outline',fn:closeModal}
-  ]);
-}
-
-function useTokenFree(){
-  if((tokens[players[currentIdx]]||0)<3)return;
-  openModal('🎁 Carta Grátis',`${players[currentIdx]} gasta 3 fichas para ganhar a carta sem adivinhar.`,[
-    {label:'✓ Pegar grátis',cls:'btn-green',fn:()=>{spendTokens(3);const p=players[currentIdx];if(!playerCards[p])playerCards[p]=[];playerCards[p].push({...currentSong});scores[p]++;revealed.push({...currentSong});renderTimeline();closeModal();toast('🎁 +1 carta!');if(scores[p]>=winScore){showWinner();return;}advance();}},
-    {label:'Cancelar',cls:'btn-outline',fn:closeModal}
-  ]);
-}
-
-function spendTokens(n){tokens[players[currentIdx]]=Math.max(0,(tokens[players[currentIdx]]||0)-n);renderScoreboard();updateTokenButtons();}
 
 // ── MODAL ──
 function openModal(title,body,actions){
@@ -786,13 +803,32 @@ function renderTimeline(){
 function showWinner(){
   clearInterval(progressInterval);clearTimeout(stopTimer);try{pausePlayback();}catch(e){}
   showScreen('winner');
-  const sorted=[...players].sort((a,b)=>scores[b]-scores[a]);
-  document.getElementById('winner-name').textContent=sorted[0];
+  const byCards=[...players].sort((a,b)=>scores[b]-scores[a]);
+  const byTokens=[...players].sort((a,b)=>(tokens[b]||0)-(tokens[a]||0));
+  document.getElementById('winner-name').textContent=byCards[0];
   const fs=document.getElementById('final-scores');fs.innerHTML='';
-  ['🥇','🥈','🥉'].forEach((m,i)=>{
-    if(!sorted[i])return;
+
+  // cards ranking
+  const cardTitle=document.createElement('div');
+  cardTitle.style.cssText='font-family:Syne,sans-serif;font-weight:700;font-size:.67rem;letter-spacing:2px;text-transform:uppercase;color:var(--green);margin:8px 0 6px';
+  cardTitle.textContent='🃏 Ranking — Linha do Tempo';
+  fs.appendChild(cardTitle);
+  const medals=['🥇','🥈','🥉'];
+  byCards.forEach((p,i)=>{
     const row=document.createElement('div');row.className='fs-row'+(i===0?' gold':'');
-    row.innerHTML=`<span class="fs-name">${m} ${sorted[i]}</span><span class="fs-pts">${scores[sorted[i]]} cartas · 🪙${tokens[sorted[i]]||0}</span>`;
+    row.innerHTML=`<span class="fs-name">${medals[i]||'·'} ${p}</span><span class="fs-pts">${scores[p]} cartas</span>`;
+    fs.appendChild(row);
+  });
+
+  // token ranking
+  const tokTitle=document.createElement('div');
+  tokTitle.style.cssText='font-family:Syne,sans-serif;font-weight:700;font-size:.67rem;letter-spacing:2px;text-transform:uppercase;color:var(--token);margin:16px 0 6px';
+  tokTitle.textContent='🪙 Ranking — Fichas (reconhecimento musical)';
+  fs.appendChild(tokTitle);
+  byTokens.forEach((p,i)=>{
+    const row=document.createElement('div');row.className='fs-row'+(i===0?' gold':'');
+    row.style.borderColor=i===0?'var(--token)':'';
+    row.innerHTML=`<span class="fs-name">${medals[i]||'·'} ${p}</span><span class="fs-pts" style="color:var(--token)">${tokens[p]||0} fichas</span>`;
     fs.appendChild(row);
   });
 }
