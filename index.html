@@ -306,7 +306,7 @@ input:focus,textarea:focus{border-color:var(--green);}
 <script>
 const CLIENT_ID    = '054b76a397a240e9ad28b68828d7b029';
 const REDIRECT_URI = window.location.origin + window.location.pathname;
-const SCOPES = ['user-read-playback-state','user-modify-playback-state','user-read-currently-playing'].join(' ');
+const SCOPES = ['user-read-playback-state','user-modify-playback-state','user-read-currently-playing','playlist-read-private','playlist-read-collaborative'].join(' ');
 const PREVIEW_MS = 30000;
 
 let accessToken=null;
