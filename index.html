@@ -106,6 +106,20 @@ input:focus,textarea:focus{border-color:var(--green);}
 #modal h2{font-family:'Syne',sans-serif;font-weight:800;font-size:1.3rem;margin-bottom:6px;}
 #modal p{font-size:.8rem;color:var(--muted2);margin-bottom:20px;line-height:1.6;white-space:pre-line;}
 .modal-acts{display:flex;gap:10px;flex-wrap:wrap;}
+/* ── INTERACTIVE POSITIONING TIMELINE ── */
+#position-timeline{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:12px;}
+#position-timeline .pt-label{font-family:'Syne',sans-serif;font-weight:700;font-size:.67rem;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:14px;}
+.pt-track{display:flex;flex-direction:column;align-items:stretch;gap:0;}
+.pt-slot{padding:5px 0;cursor:pointer;}
+.pt-slot-inner{width:100%;height:30px;border:2px dashed var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.65rem;color:var(--muted2);letter-spacing:1px;text-transform:uppercase;transition:all .2s;}
+.pt-slot:hover .pt-slot-inner{border-color:var(--accent);background:#f5a62318;color:var(--accent);}
+.pt-slot-inner.selected{border-color:var(--green)!important;background:#1DB95422!important;color:var(--green)!important;border-style:solid!important;font-weight:700;}
+.pt-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;}
+.pt-card-year{font-family:'Syne',sans-serif;font-weight:800;font-size:1rem;color:var(--green);min-width:40px;}
+.pt-card-info{flex:1;font-size:.78rem;line-height:1.4;}
+.pt-card-artist{font-size:.68rem;color:var(--muted2);}
+.pt-card.correct{border-color:var(--green);background:#1DB95418;}
+.pt-card.wrong{border-color:var(--accent2);background:#e0555518;}
 #timeline-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 18px;}
 #timeline-panel h3{font-family:'Syne',sans-serif;font-size:.67rem;letter-spacing:2px;text-transform:uppercase;color:var(--muted2);margin-bottom:12px;}
 #timeline-list{display:flex;flex-direction:column;gap:5px;max-height:220px;overflow-y:auto;}
@@ -242,8 +256,11 @@ input:focus,textarea:focus{border-color:var(--green);}
       </div>
     </div>
     <!-- phase 2 -->
-    <div class="act-row hidden" id="act-position">
-      <button class="btn btn-accent" onclick="goPhaseReveal()">Posicionei → Revelar Ano</button>
+    <div class="hidden" id="act-position">
+      <div id="position-timeline">
+        <div class="pt-label">📍 Onde essa música se encaixa na sua linha do tempo?</div>
+        <div class="pt-track" id="pt-track"></div>
+      </div>
     </div>
     <!-- phase 3 -->
     <div class="act-row hidden" id="act-reveal">
@@ -295,7 +312,7 @@ const SCOPES = ['user-read-playback-state','user-modify-playback-state','user-re
 const PREVIEW_MS = 30000;
 
 let accessToken=null;
-let songs=[],players=[],scores={},tokens={},anchors={};
+let songs=[],players=[],scores={},tokens={},anchors={},playerCards={};
 let currentIdx=0,round=1,winScore=10,maxRounds=50;
 let used=new Set(),revealed=[];
 let currentSong=null,phase=0;
@@ -437,7 +454,7 @@ function startGame(){
   const names=document.getElementById('players-input').value.trim().split('\n').map(s=>s.trim()).filter(Boolean);
   if(names.length<2)return showErr('Adicione ao menos 2 jogadores.');
   if(songs.length<names.length+5)return showErr('Adicione mais músicas.');
-  players=names;players.forEach(p=>{scores[p]=0;tokens[p]=0;anchors[p]=null;});
+  players=names;players.forEach(p=>{scores[p]=0;tokens[p]=0;anchors[p]=null;playerCards[p]=[];});
   currentIdx=0;round=1;
   winScore=parseInt(document.getElementById('win-score').value)||10;
   maxRounds=parseInt(document.getElementById('max-rounds').value)||50;
@@ -481,6 +498,8 @@ async function nextTurn(){
   document.getElementById('guess-result').classList.add('hidden');
   document.getElementById('act-after-guess').classList.add('hidden');
   document.getElementById('guess-form').style.display='flex';
+  document.getElementById('act-reveal').innerHTML=`<button class="btn btn-green" onclick="markCorrect()">✓ Acertou a posição</button><button class="btn btn-red" onclick="markWrong()">✗ Errou a posição</button>`;
+  const oldBtn=document.getElementById('btn-confirm-position');if(oldBtn)oldBtn.remove();
 
   setPhase(0);renderScoreboard();renderTurnBanner();renderTimeline();updateTokenButtons();
 
@@ -536,22 +555,127 @@ function skipGuess(){
   res.classList.remove('hidden');document.getElementById('act-after-guess').classList.remove('hidden');
 }
 
-function goPhasePosition(){document.getElementById('guess-form').style.display='flex';setPhase(2);}
+let chosenSlotIndex = null; // index into playerTimeline where user placed the card
+
+function goPhasePosition(){
+  document.getElementById('guess-form').style.display='flex';
+  chosenSlotIndex = null;
+  renderPositionTimeline();
+  setPhase(2);
+}
+
+function getPlayerTimeline(player){
+  // anchor + earned cards, sorted by year
+  const cards = [anchors[player], ...(playerCards[player]||[])];
+  return cards.filter(Boolean).sort((a,b)=>a.year-b.year);
+}
+
+function renderPositionTimeline(){
+  const player = players[currentIdx];
+  const timeline = getPlayerTimeline(player);
+  const track = document.getElementById('pt-track');
+  track.innerHTML = '';
+
+  // n cards → n+1 slots
+  const nSlots = timeline.length + 1;
+  for(let i = 0; i < nSlots; i++){
+    // slot before card i
+    const slot = document.createElement('div');
+    slot.className = 'pt-slot';
+    const inner = document.createElement('div');
+    inner.className = 'pt-slot-inner';
+    inner.textContent = i === 0 ? '← antes de tudo' : i === timeline.length ? 'depois de tudo →' : '↕ aqui';
+    const slotIdx = i;
+    slot.onclick = () => selectSlot(slotIdx, nSlots);
+    slot.appendChild(inner);
+    track.appendChild(slot);
+
+    // card after slot (except last slot)
+    if(i < timeline.length){
+      const card = document.createElement('div');
+      card.className = 'pt-card';
+      card.innerHTML = `<span class="pt-card-year">${timeline[i].year}</span><span class="pt-card-info">${timeline[i].title}<br><span class="pt-card-artist">${timeline[i].artist}</span></span>`;
+      track.appendChild(card);
+    }
+  }
+}
+
+function selectSlot(idx, total){
+  chosenSlotIndex = idx;
+  // update visual
+  document.querySelectorAll('.pt-slot-inner').forEach((el,i) => {
+    el.classList.toggle('selected', i === idx);
+  });
+  // show confirm button if not already there
+  let confirmBtn = document.getElementById('btn-confirm-position');
+  if(!confirmBtn){
+    confirmBtn = document.createElement('button');
+    confirmBtn.id = 'btn-confirm-position';
+    confirmBtn.className = 'btn btn-accent full';
+    confirmBtn.style.marginTop = '12px';
+    confirmBtn.textContent = 'Confirmar posição → Revelar Ano';
+    confirmBtn.onclick = goPhaseReveal;
+    document.getElementById('position-timeline').appendChild(confirmBtn);
+  }
+}
 
 async function goPhaseReveal(){
+  if(chosenSlotIndex === null){ toast('⚠️ Clique em um slot primeiro.'); return; }
   clearInterval(progressInterval);clearTimeout(stopTimer);
   try{await pausePlayback();}catch(e){}
   document.getElementById('btn-playpause').textContent='▶';
   document.getElementById('np-status').textContent='pausado';
   document.getElementById('song-masked').style.display='none';
   document.getElementById('song-revealed').style.display='block';
-  const yb=document.getElementById('year-bubble');yb.textContent='';yb.className='year-bubble hidden';
+  const yb=document.getElementById('year-bubble');
+  yb.textContent=currentSong.year; yb.className='year-bubble revealed';
+  // auto-check correctness
+  checkPosition();
   setPhase(3);
 }
 
-function revealYear(){const yb=document.getElementById('year-bubble');if(!yb.classList.contains('hidden'))return;yb.textContent=currentSong.year;yb.className='year-bubble revealed';}
+function checkPosition(){
+  const player = players[currentIdx];
+  const timeline = getPlayerTimeline(player);
+  // correct if currentSong.year fits between timeline[chosenSlotIndex-1] and timeline[chosenSlotIndex]
+  const before = chosenSlotIndex > 0 ? timeline[chosenSlotIndex-1].year : -Infinity;
+  const after  = chosenSlotIndex < timeline.length ? timeline[chosenSlotIndex].year : Infinity;
+  const correct = currentSong.year >= before && currentSong.year <= after;
 
-async function togglePlay(){
+  // highlight chosen slot and show result on cards
+  const track = document.getElementById('pt-track');
+  const slots = track.querySelectorAll('.pt-slot-inner');
+  const cards = track.querySelectorAll('.pt-card');
+
+  if(slots[chosenSlotIndex]){
+    slots[chosenSlotIndex].textContent = correct ? '✓ Correto!' : '✗ Errado';
+    slots[chosenSlotIndex].style.borderColor = correct ? 'var(--green)' : 'var(--accent2)';
+    slots[chosenSlotIndex].style.background   = correct ? '#1DB95422' : '#e0555522';
+    slots[chosenSlotIndex].style.color        = correct ? 'var(--green)' : 'var(--accent2)';
+    slots[chosenSlotIndex].style.borderStyle  = 'solid';
+  }
+
+  // hide confirm button
+  const cb = document.getElementById('btn-confirm-position');
+  if(cb) cb.remove();
+
+  // replace phase 3 buttons with auto result
+  document.getElementById('act-reveal').innerHTML = correct
+    ? `<div style="font-family:'Syne',sans-serif;font-weight:700;color:var(--green);font-size:1rem;text-align:center;padding:8px 0;">🎉 Posição correta! +1 carta.</div><button class="btn btn-green full" onclick="markCorrect()">Continuar →</button>`
+    : `<div style="font-family:'Syne',sans-serif;font-weight:700;color:var(--accent2);font-size:1rem;text-align:center;padding:8px 0;">❌ Posição errada. A música é de ${currentSong.year}.</div><button class="btn btn-outline full" onclick="markWrong()">Continuar →</button>`;
+}
+
+function markCorrect(){
+  const player = players[currentIdx];
+  if(!playerCards[player]) playerCards[player]=[];
+  playerCards[player].push({...currentSong});
+  scores[player]++;
+  revealed.push({...currentSong});
+  renderTimeline();
+  if(scores[player]>=winScore){showWinner();return;}
+  advance();
+}
+function markWrong(){advance();}
   const btn=document.getElementById('btn-playpause');
   try{
     if(btn.textContent==='⏸'){await pausePlayback();btn.textContent='▶';document.getElementById('np-status').textContent='pausado';clearInterval(progressInterval);clearTimeout(stopTimer);}
@@ -584,7 +708,7 @@ function useTokenIntervene(){
   if(phase!==3){toast('⚠️ Intervenção só na fase de revelação!');return;}
   if((tokens[players[currentIdx]]||0)<1)return;
   openModal('🪙 Intervenção!',`${players[currentIdx]} gasta 1 ficha para desafiar a posição.\n\nCerto → ganha a carta.\nErrado → perde a ficha.`,[
-    {label:'✓ Certa',cls:'btn-green',fn:()=>{spendTokens(1);scores[players[currentIdx]]++;revealed.push({...currentSong});renderTimeline();closeModal();toast(`🏆 +1 carta!`);if(scores[players[currentIdx]]>=winScore){showWinner();return;}advance();}},
+    {label:'✓ Certa',cls:'btn-green',fn:()=>{spendTokens(1);const p=players[currentIdx];if(!playerCards[p])playerCards[p]=[];playerCards[p].push({...currentSong});scores[p]++;revealed.push({...currentSong});renderTimeline();closeModal();toast(`🏆 +1 carta!`);if(scores[p]>=winScore){showWinner();return;}advance();}},
     {label:'✗ Errada',cls:'btn-red',fn:()=>{spendTokens(1);closeModal();toast('❌ Ficha perdida.');advance();}},
     {label:'Cancelar',cls:'btn-outline',fn:closeModal}
   ]);
@@ -601,7 +725,7 @@ function useTokenSkip(){
 function useTokenFree(){
   if((tokens[players[currentIdx]]||0)<3)return;
   openModal('🎁 Carta Grátis',`${players[currentIdx]} gasta 3 fichas para ganhar a carta sem adivinhar.`,[
-    {label:'✓ Pegar grátis',cls:'btn-green',fn:()=>{spendTokens(3);scores[players[currentIdx]]++;revealed.push({...currentSong});renderTimeline();closeModal();toast('🎁 +1 carta!');if(scores[players[currentIdx]]>=winScore){showWinner();return;}advance();}},
+    {label:'✓ Pegar grátis',cls:'btn-green',fn:()=>{spendTokens(3);const p=players[currentIdx];if(!playerCards[p])playerCards[p]=[];playerCards[p].push({...currentSong});scores[p]++;revealed.push({...currentSong});renderTimeline();closeModal();toast('🎁 +1 carta!');if(scores[p]>=winScore){showWinner();return;}advance();}},
     {label:'Cancelar',cls:'btn-outline',fn:closeModal}
   ]);
 }
@@ -640,7 +764,7 @@ function updateInstr(){
   const msgs=[
     `🎧 <strong>${p}</strong> tem <strong>${c} carta${c!==1?'s':''}</strong>. Âncora: <strong>${a?.title}</strong> (${a?.year}). Escute os 30s e tente adivinhar nome e artista para ganhar uma 🪙!`,
     `✏️ <strong>${p}</strong>, escreva o nome da música e o artista. Se acertar os dois, ganha 1 ficha!`,
-    `📍 <strong>${p}</strong> deve dizer em voz alta onde a música se encaixa. ${c===0?`Você só tem a âncora (${a?.year}): ela vem antes ou depois de <strong>${a?.title}</strong>?`:`Você tem ${c+1} referências (âncora + ${c} carta${c!==1?'s':''}). Posicione o papel na sua linha do tempo e clique em Posicionei.`}`,
+    `📍 <strong>${p}</strong>, clique no slot onde a música se encaixa na sua linha do tempo. Os anos das suas cartas estão visíveis. Quando escolher, confirme para revelar o ano.`,
     `🔎 Clique no <strong>?</strong> para revelar o ano e confirmar se <strong>${p}</strong> acertou.${t>0?' <em>Outros com fichas podem intervir!</em>':''}`
   ];
   document.getElementById('instr-text').innerHTML=msgs[phase]||'';
@@ -674,7 +798,7 @@ function showWinner(){
 // ── UTILS ──
 function showScreen(n){['login','setup','anchor','game','winner'].forEach(s=>document.getElementById('screen-'+s).classList.toggle('active',s===n));}
 function logout(){clearToken();clearInterval(progressInterval);clearTimeout(stopTimer);showScreen('login');}
-function restartGame(){clearInterval(progressInterval);clearTimeout(stopTimer);revealed=[];anchors={};showScreen('setup');loadDevices();}
+function restartGame(){clearInterval(progressInterval);clearTimeout(stopTimer);revealed=[];anchors={};playerCards={};showScreen('setup');loadDevices();}
 function showErr(msg){const el=document.getElementById('err-msg');el.textContent=msg;el.style.display='block';}
 function showLoginErr(msg){const el=document.getElementById('err-login');el.textContent=msg;el.style.display='block';}
 function fmtTime(s){const m=Math.floor(s/60),sec=Math.floor(s%60);return`${m}:${sec.toString().padStart(2,'0')}`;}
