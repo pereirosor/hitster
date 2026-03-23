@@ -174,7 +174,7 @@ input:focus,textarea:focus{border-color:var(--green);}
   <div>
     <label>Playlist (exportify.net → CSV)</label>
     <div style="display:flex;gap:8px;align-items:center;">
-      <input type="file" id="csv-input" accept=".csv" onchange="loadCSV(event)" style="flex:1;padding:10px;cursor:pointer;">
+      <input type="file" id="csv-input" accept=".csv,text/csv,text/plain,application/csv,*/*" onchange="loadCSV(event)" style="flex:1;padding:10px;cursor:pointer;">
     </div>
     <p class="hint mt8">Exporte sua playlist em <strong>exportify.net</strong> e faça upload do CSV aqui — sem precisar editar nada.</p>
     <div id="playlist-status" style="display:none;margin-top:8px;font-size:.75rem;padding:10px 14px;border-radius:7px;"></div>
